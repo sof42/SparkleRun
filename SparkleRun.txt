@@ -1,0 +1,756 @@
+JMP main
+JMP isr
+unicorn_position: DW 0x0000   ; The position of the unicorn on the screen (0, 0).
+score:      DW 0              ; When a score of 3 is reached, the game is won.
+vsync:      DW 0              ; Indicates the VSync event.
+keypress:   DW 0              ; Indicates a keypress event.
+str: DB "@"
+     DB 0
+cloud_str: DB "&"
+           DB 0
+won:       DB "Stellar win!"
+           DB 0
+win_text:  DB "Flawless run!   " 
+           DB 0
+loss:      DB "Ups and downs."
+           DB 0
+loss_text: DB "Rise from defeat"
+           DB 0
+text_display: DB "Shoot for stars!"
+              DB 0
+loading:   DB "Soaring..."
+           DB 0              
+key: DW 0
+
+isr:
+    PUSH A            ; Do not lose the value of register A.
+    IN 1              ; Which interrupt event occured?
+    CMP A, 4          ; Was it VSync?
+    JNE isr_keyboard  ; If not, it had to be the keyboard.
+    MOV [vsync], 1    ; If yes, set the VSync flag.
+    MOV A, 4          ; VSync interrupt number.
+    OUT 2             ; The VSync interrupt has been serviced.
+    JMP isr_return
+isr_keyboard:
+    IN 5              ; Read the key event status.
+    AND A, 1          ; Check the keydown bit.
+    CMP A, 1          ; If not set,
+    JNE isr_key_clear ; clear the key data but do not set the flag.
+    MOV [keypress], 1 ; Set the keypress flag.
+    IN 6              ; Read the pressed key code.
+    MOV [key], A      ; Store the key value in the key variable.
+    MOV A, 1          ; Keyboard interrupt number.
+    OUT 2             ; The keyboard interrupt has been serviced.
+isr_key_clear:
+    IN 6              ; Read the pressed key code to clear the status.
+    MOV A, 1          ; Keyboard interrupt number.
+    OUT 2             ; The keyboard interrupt has been serviced.
+isr_return:
+    POP A             ; Restore the original value of register A.
+    IRET
+tile_definitions:
+; The outline of the unicorn (0xF0)
+    DB "\x00\x04\x00\x0A\x00\x72\x00\xA6\x01\x1A\x42\x01\xA2\x0B\x92\x01"
+    DB "\x9C\x01\x80\x06\xA0\x04\xE0\x04\xA0\x04\x2B\xD4\x36\x6C\x00\x00"
+; The white part of the unicorn (0xF1)
+    DB "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x04\x00\x1E\x00\x14\x00\x1E"
+    DB "\x00\x3E\x08\x38\x10\x38\x10\x78\x50\x78\x14\x28\x00\x00\x00\x00"
+; The yellow part of the unicorn[horn] (0xF2)
+    DB "\x00\x00\x00\x04\x00\x0C\x00\x18\x00\x00\x00\x00\x00\x00\x00\x00"
+    DB "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+; The rosegold part of the unicorn[hair1] (0xF3)
+    DB "\x00\x00\x00\x00\x00\x00\x00\x40\x00\x80\x01\x00\x41\x00\x60\x00"
+    DB "\x42\x00\x46\x00\x4A\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+;  The BLUE part of the unicorn[hair2] (0xF4)
+    DB "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x20\x00\x20"
+    DB "\x20\x40\x30\x40\x00\x40\x08\x80\x0F\x00\x00\x00\x00\x00\x00\x00"
+; The LILAC part of the unicorn[hair3] (0xF5)
+    DB "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x60\x00\x70\x00\xC0\x01\xC0"
+    DB "\x01\x80\x01\x80\x05\x80\x07\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    
+star:
+    DB "\x01\x80\x02\x40\x02\x40\x04\x20\xF8\x1F\x82\x41\x42\x42\x20\x04"
+    DB "\x10\x08\x10\x08\x20\x04\x20\x04\x41\x82\x46\x62\x98\x19\xE0\x07"
+cloud:
+    DB "\x00\x00\x00\x00\x0F\xF0\x3F\xFC\x3F\xFC\x0F\xFO\x1F\xF8\x3F\xFC"
+    DB "\x3C\x3C\x33\xCC\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+
+process_user_input:
+    MOV A, [keypress]             ; Check if a key was pressed.
+    CMP A, 0                      ; If not, do nothing and return.
+    JE process_user_input_return
+    CALL move_unicorn
+    process_user_input_return:
+    MOV [keypress], 0
+    MOV [key], 0
+    RET
+
+; text displayed at the beginning of the game
+text_display1:
+  MOV A, text_display       ; pointer to string
+  MOV D, text_displayADD    ; get the address
+string_loop:
+  MOVB BL, [A]              ; Get the current character.
+  CMPB BL, 0                ; Is it a terminal value ?
+  JE return_string          ; If yes , we are done.
+  MOVB [D], BL              ; Otherwise copy the character to the display cell .
+  INC A                     ; Compute the address of the next character .
+  INC D                     ; Compute the address of the next display cell .
+  JMP string_loop           ; Repeat for the next character .
+return_string:
+   RET
+
+; text that is displayed when the game is won
+text_display2:
+  MOV A, win_text
+  MOV D, text_displayADD
+win_loop:
+    MOVB BL, [A]        ; Get the current character .
+    CMPB BL, 0          ; Is it a terminal value ?
+    JE return_string2   ; If yes , we are done .
+    MOVB [D], BL        ; Otherwise copy the character to the display cell .
+    INC A               ; Compute the address of the next character .
+    INC D               ; Compute the address of the next display cell .
+    JMP win_loop        ; Repeat for the next character .
+return_string2:
+     RET
+
+text_display3:
+  MOV A, loss_text
+  MOV D, text_displayADD
+loss_loop:
+    MOVB BL, [A]        ; Get the current character .
+    CMPB BL, 0          ; Is it a terminal value ?
+    JE return_string3   ; If yes , we are done .
+    MOVB [D], BL        ; Otherwise copy the character to the display cell .
+    INC A               ; Compute the address of the next character .
+    INC D               ; Compute the address of the next display cell .
+    JMP loss_loop       ; Repeat for the next character .
+return_string3:
+     RET
+
+move_unicorn:
+    ; Get the key value from the key variable.
+    MOV A, [key]
+    MOV B, [unicorn_position]     ; Get the current UNICORN position.
+    CMP A, 'a'      ; 'a' key
+    JE left
+    CMP A, 's'      ; 's' key
+    JE down
+    CMP A, 'd'      ; 'd' key
+    JE right
+    CMP A, 'w'      ; 'w' key
+    JE up    
+up:
+    CMPB BL, 0x00               ; reached the top?
+    JE move_done
+    SUBB BL, 0x10               ; rows-1
+    MOV [unicorn_position], B
+    JMP move_done
+left:
+    CMPB BH, 0x00               ; reached the left border?
+    JE move_done
+    SUBB BH, 0x10               ; col-1
+    MOV [unicorn_position], B
+    JMP move_done
+down:
+    CMPB BL, 0xB0               ; reached the laser?
+    JE lost                     ; if yes, the player has lost
+    ADDB BL, 0x10               ; row+1
+    MOV [unicorn_position], B
+    JMP move_done
+right:
+    CMPB BH, 0xF0               ; reached the right border?
+    JE move_done
+    ADDB BH, 0x10               ; col+1
+    MOV [unicorn_position], B
+    JMP move_done
+move_done:
+    CALL check_points
+    CALL check_collision
+    MOV [keypress], 0
+    MOV [key], 0
+    MOV [unicorn_position], B
+    CALL draw_unicorn
+RET
+
+lost:
+CALL text_display3
+    MOV C, loss             ; Pointer to string str .
+    MOV D, 0x0720           ; Pointer to the graphics cell at (16 , 7).
+print_loop1:
+     MOV A, D               ; Activate the graphics cell
+     OUT 8                  ; through the VIDADDR register .
+     MOVB AH , [C]          ; Get the current string character .
+     CMPB AH , 0            ; If zero , we are done printing .
+     JE print_break1
+     MOVB AL, 162           ; Set up the purple color.
+     OUT 9                  ; Print the character .
+     INC C                  ; Next character .
+     ADD D, 2               ; Next screen cell .
+     JMP print_loop1        ; Repeat for the next character .
+print_break1:
+       MOV A, 0xA302        ; The VRAM address of the HScroll information .
+       OUT 8                ; Activate the HScroll VRAM address .
+       MOV A, 0             ; Let the offset be initially 0.
+       offset_loop1:
+       OUT 9                ; Set the current offset .
+       INC A                ; Prepare the new offset value .
+       CMP A, 512           ; If the offset has reached 512 pixels ,
+       JBE offset_continue
+       MOV A, 0             ; reset the offset back to 0.
+
+draw_text:
+    MOVB BH, [C]        ; Get a character.
+    CMPB BH, 0          ; If the character is 0, we are done
+    JE draw_text_return
+    MOV A, D            ; Set the address
+    OUT 8               ; through VIDADDR
+    MOV A, B            ; Set the character and its color
+    OUT 9               ; through the VIDDATA
+    INC C               ; Point to the next character
+    ADD D, 2            ; Set the next address.
+    JMP draw_text
+draw_text_return:
+    RET
+draw_loading_screen:
+    MOV C, loading     ; Point to the "Soaring..." string.
+    MOV B, 254         ; Set the color of the text.
+    MOV D, 0x1706      ; The VRAM position of the text.
+    CALL draw_text
+    RET
+show_loading_screen:
+    MOV A, 0xA304      ; Access the VRAM VScroll 
+    OUT 8              ; through the VIDADDR
+    MOV A, 256         ; Scroll vertically 16 tiles
+    OUT 9              ; by setting the VScroll value to 256.
+    MOV A, 0xA300      ; Access the VRAM Background value
+    OUT 8              ; through the VIDADDR I/O register.
+    MOV A, 215         ; Set it to violet
+    OUT 9              ; by setting the Background value to 0.
+    RET
+ 
+; loads all custom graphic tiles to VRAM, def of chars start at 0x8000, we redifine 0xF0 - 0xF5
+; which start at VRAM address 0x9E00.
+load_vram_tiles:
+    MOV C, tile_definitions
+    MOV D, 0x9E00 ; tiles start at the VRAM address 0x9E00.
+load_vram_tiles_loop:
+    CMP D, 0x9F30 ; tiles end at the VRAM address 0x9F3F since 9E00 + 30 (in decimal 6 sprites*8bytes).
+    JE load_vram_tiles_return
+    MOV A, D      ; Set the VRAM address
+    OUT 8         ; through the VIDADDR I/O register.
+    MOV A, [C]    ; Load a 16-bit word of the data.
+    OUT 9         ; Store it to VRAM.
+    ADD C, 2      ; Next 16-bit data.
+    ADD D, 2      ; Next VRAM address.
+    JMP load_vram_tiles_loop
+load_vram_tiles_return:
+    RET
+    
+draw_unicorn:
+    MOV B, draw_unicorn_colors  ; The pointer to a sprite information.
+    MOV D, 0xA306               ; The VRAM address of sprite 1.
+    MOV C, 6                    ; Set up sprites 1 - 6.
+draw_unicorn_sprite:
+    CMP C, 0                    ; Have we finished with all 6 sprites?
+    JE draw_unicorn_return
+    MOV A, D                    ; VRAM address of the tile and color values.
+    OUT 8                       ; Access them through the VIDADDR I/O register.
+    MOV A, [B]                  ; Update the tile (BH) and color (BL) values
+    OUT 9                       ; through the VIDDATA I/O register.
+    ADD D, 2                    ; Move to the postion information,
+    MOV A, D                    ; which is encoded with the succeeding 2 bytes
+    OUT 8                       ; in the VRAM.
+    MOV A, [unicorn_position]   ; Get the position from the global variable.
+    OUT 9                       ; Both are set through the VIDDATA I/O register.
+    ADD B, 2                    ; Point to the information of the next sprite.
+    ADD D, 2                    ; Set up the VRAM address of the next sprite.
+    DEC C                       ; One sprite done, do the next.
+    JMP draw_unicorn_sprite
+draw_unicorn_return:
+    RET
+
+; A constant array that defines the six tiles and colors of the unicorn.
+draw_unicorn_colors:
+    DW 0xF000     ; The outline: character F0, color black.
+    DW 0xF1FF     ; The eyes: character F1, color white.
+    DW 0xF2FD     ; The horn: character F2, color yellow.
+    DW 0xF3CA     ; The hair1: character F3, color "rosegold".
+    DW 0xF44F     ; The hair2: character F4, color blue 
+    DW 0xF5B7     ; the hair3: character F5, color lilac
+    
+draw_map:
+    MOV D, 0x0C00       ; The ground that starts at VRAM address 0x0C00. (Y=12; X=0)
+draw_map_ground:
+    CMP D, 0x0D00       ; The ground that starts at VRAM address 0x0CFF. (Y=12; X=255)
+    JAE draw_map_parts  ; If done drawing ground, continue with the stars.
+    MOV A, D            ; Set the VRAM address
+    OUT 8               ; through the VIDADDR I/O register.
+    MOV A, 0xDB97       ; Place the ASCII character 0xDB in a baby purple color
+    OUT 9               ; through the VIDDATA I/O register.
+    ADD D, 2            ; VRAM dddress of the next ground character.
+    JMP draw_map_ground
+
+draw_map_parts:
+draw_cloud:
+MOV C, cloud_str
+MOV D, 0x0202
+  loopcl:
+  ; iterate through the string
+  MOV A, D
+  OUT 8         ; VIDADDR
+  MOVB AH, [C]  ; first char
+  CMPB AH, 0    ; if end of string break the loop
+  JE breakcl
+  MOVB AL, 255  ; color
+  OUT 9         ; VIDDATA
+  INC C         ; next char
+  ADD D, 2      ; next text cell, moving right to write in the even address
+  JMP loopcl
+breakcl:
+  MOV C, cloud  ; pointer to star
+  MOV D, 0x84C0 ; address of ascii @ (64) that we want to change
+  MOV B, 16     ; size of data
+cloud_loop:
+  CMP B, 0      ; is it the end, if so break
+  JE draw_cloud2
+  MOV A, D      ; address
+  OUT 8         ; VIDADDR
+  MOV A, [C]    ; pointer to star
+  OUT 9         ; VIDDATA
+  DEC B         
+  ADD C, 2      ; next word in RAM
+  ADD D, 2      ; next VRAM address
+  JMP cloud_loop
+  
+draw_cloud2:
+MOV C, cloud_str
+MOV D, 0x090A
+loopcl2:
+  ; iterate through the string
+  MOV A, D
+  OUT 8         ; VIDADDR
+  MOVB AH, [C]  ; first char
+  CMPB AH, 0    ; if end of string break the loop
+  JE breakcl2
+  MOVB AL, 255  ; color
+  OUT 9         ; VIDDATA
+  INC C         ; next char
+  ADD D, 2      ; next text cell, moving right to write in the even address
+  JMP loopcl2
+breakcl2:
+  MOV C, cloud   ; pointer to star
+  MOV D, 0x84C0 ; address of ascii @ (64) that we want to change
+  MOV B, 16     ; size of data
+cloud_loop2:
+  CMP B, 0      ; is it the end, if so break
+  JE draw_cloud3
+  MOV A, D      ; address
+  OUT 8         ; VIDADDR
+  MOV A, [C]    ; pointer to star
+  OUT 9         ; VIDDATA
+  DEC B         
+  ADD C, 2      ; next word in RAM
+  ADD D, 2      ; next VRAM address
+  JMP cloud_loop2
+  
+draw_cloud3:
+  MOV C, cloud_str
+  MOV D, 0x0010
+loopcl3:
+  ; iterate through the string
+  MOV A, D
+  OUT 8         ; VIDADDR
+  MOVB AH, [C]  ; first char
+  CMPB AH, 0    ; if end of string break the loop
+  JE breakcl3
+  MOVB AL, 255  ; color
+  OUT 9         ; VIDDATA
+  INC C         ; next char
+  ADD D, 2      ; next text cell, moving right to write in the even address
+  JMP loopcl3
+breakcl3:
+  MOV C, cloud   ; pointer to star
+  MOV D, 0x84C0 ; address of ascii @ (64) that we want to change
+  MOV B, 16     ; size of data
+cloud_loop3:
+  CMP B, 0      ; is it the end, if so break
+  JE draw_map_star3
+  MOV A, D      ; address
+  OUT 8         ; VIDADDR
+  MOV A, [C]    ; pointer to star
+  OUT 9         ; VIDDATA
+  DEC B         
+  ADD C, 2      ; next word in RAM
+  ADD D, 2      ; next VRAM address
+  JMP cloud_loop3
+  
+draw_map_star3:
+ MOV C, str        ; pointer to string
+ MOV D, 0x001C     ; pointer to text cell 
+loop3:
+  ; iterate through the string
+  MOV A, D
+  OUT 8         ; VIDADDR
+  MOVB AH, [C]  ; first char
+  CMPB AH, 0    ; if end of string break the loop
+  JE break3
+  MOVB AL, 194  ; color
+  OUT 9         ; VIDDATA
+  INC C         ; next char
+  ADD D, 2      ; next text cell, moving right to write in the even address
+  JMP loop3
+break3:
+  MOV C, star   ; pointer to star
+  MOV D, 0x8800 ; address of ascii @ (64) that we want to change
+  MOV B, 16     ; size of data
+star_loop3:
+  CMP B, 0      ; is it the end, if so break
+  JE draw_map_star2
+  MOV A, D      ; address
+  OUT 8         ; VIDADDR
+  MOV A, [C]    ; pointer to star
+  OUT 9         ; VIDDATA
+  DEC B         
+  ADD C, 2      ; next word in RAM
+  ADD D, 2      ; next VRAM address
+  JMP star_loop3
+  
+draw_map_star2:
+  MOV C, str       ; pointer to string
+  MOV D, 0x0A0E    ; pointer to text cell 
+loop2:
+  ; iterate through the string
+  MOV A, D
+  OUT 8         ; VIDADDR
+  MOVB AH, [C]  ; first char
+  CMPB AH, 0    ; if end of string break the loop
+  JE break2
+  MOVB AL, 194  ; color
+  OUT 9         ; VIDDATA
+  INC C         ; next char
+  ADD D, 2      ; next text cell, moving right to write in the even address
+  JMP loop2
+break2:
+  MOV C, star   ; pointer to star
+  MOV D, 0x8800 ; address of ascii @ (64) that we want to change
+  MOV B, 16     ; size of data
+star_loop2:
+  CMP B, 0      ; is it the end, if so break
+  JE draw_map_star1
+  MOV A, D      ; address
+  OUT 8         ; VIDADDR
+  MOV A, [C]    ; pointer to star
+  OUT 9         ; VIDDATA
+  DEC B         
+  ADD C, 2      ; next word in RAM
+  ADD D, 2      ; next VRAM address
+  JMP star_loop2
+  
+draw_map_star1:
+  MOV C, str     ; pointer to string
+  MOV D, 0x0606  ; pointer to text cell 
+loop1:
+  ; iterate through the string
+  MOV A, D
+  OUT 8         ; VIDADDR
+  MOVB AH, [C]  ; first char
+  CMPB AH, 0    ; if end of string break the loop
+  JE break1
+  MOVB AL, 194  ; color
+  OUT 9         ; VIDDATA
+  INC C         ; next char
+  ADD D, 2      ; next text cell, moving right to write in the even address
+  JMP loop1
+break1:
+  MOV C, star   ; pointer to star
+  MOV D, 0x8800 ; address of ascii @ (64) that we want to change
+  MOV B, 16     ; size of data
+star_loop1:
+  CMP B, 0      ; is it the end, if so break
+  JE break_star_loop
+  MOV A, D      ; address
+  OUT 8         ; VIDADDR
+  MOV A, [C]    ; pointer to star
+  OUT 9         ; VIDDATA
+  DEC B         
+  ADD C, 2      ; next word in RAM
+  ADD D, 2      ; next VRAM address
+  JMP star_loop1
+  
+break_star_loop:
+  RET
+
+check_collision:
+    MOV A, [unicorn_position]  ; Load the unicorn position from memory into register A            ; 
+    SHRB AL, 4
+    CMPB AL, 0x02
+    JNE check_cloud2
+    MOV A, [unicorn_position]
+    SHRB AH, 3
+    CMPB AH, 0x02
+    JE lost
+    check_cloud2:
+    MOV A, [unicorn_position]  ; Load the unicorn position from memory into register A            ; 
+    SHRB AL, 4
+    CMPB AL, 0x09
+    JNE check_cloud3
+    MOV A, [unicorn_position]
+    SHRB AH, 3
+    CMPB AH, 0x0A
+    JE lost
+    check_cloud3:
+    MOV A, [unicorn_position]  ; Load the unicorn position from memory into register A            ; 
+    SHRB AL, 4
+    CMPB AL, 0x00
+    JNE returncol
+    MOV A, [unicorn_position]
+    SHRB AH, 3
+    CMPB AH, 0x10
+    JE lost
+    returncol:
+    RET
+
+show_map_screen:
+    MOV A, 0xA302          ; Access the VRAM HScroll value
+    OUT 8                  ; through the VIDADDR I/O register.
+    MOV A, 0               ; Set HScroll to 0
+    OUT 9                  ; through the VIDDATA I/O register.
+    MOV A, 0xA304          ; Access the VRAM VScroll value
+    OUT 8                  ; through the VIDADDR I/O register.
+    MOV A, 0               ; Set VScroll to 0
+    OUT 9                  ; through the VIDDATA I/O register.
+    MOV A, 0xA300          ; Access the VRAM Background value
+    OUT 8                  ; through the VIDADDR I/O register.
+    MOV A, 0x00FB          ; We choose color pink,
+    OUT 9                  ; so we set the Background value to 0x00FB.
+    RET
+    
+check_points:
+    check_star1:
+    MOV A, [unicorn_position]  ; Load the unicorn position from memory into register A            ; 
+    SHRB AL, 4
+    CMPB AL, 0x06
+    JNE check_star2
+    MOV A, [unicorn_position]
+    SHRB AH, 3
+    CMPB AH, 0x06
+    JNE check_star2     ; Jump if the unicorn position is not equal to the star position
+    MOV A, [score] 
+    INC A
+    CMP A, 3            ; if score is 3, the game is won
+    JE win
+    MOV [score], A
+    MOV A, 0
+    MOV C, str        ; pointer to string
+    MOV D, 0x0606     ; pointer to text cell 
+; remove star 1 if caught
+loopc1:
+  ; iterate through the string
+  MOV A, D
+  OUT 8         ; VIDADDR
+  MOVB AH, [C]  ; first char
+  CMPB AH, 0    ; if end of string break the loop
+  JE breakc1
+  MOVB AL, 0xFB ; color
+  OUT 9         ; VIDDATA
+  INC C         ; next char
+  ADD D, 2      ; next text cell, moving right to write in the even address
+  JMP loopc1
+breakc1:
+  MOV C, star   ; pointer to star
+  MOV D, 0x8800 ; address of ascii @ (64) that we want to change
+  MOV B, 16     ; size of data
+star_loopc1:
+  CMP B, 0      ; is it the end, if so break
+  JE return
+  MOV A, D      ; address
+  OUT 8         ; VIDADDR
+  MOV A, [C]    ; pointer to star
+  OUT 9         ; VIDDATA
+  DEC B         
+  ADD C, 2      ; next word in RAM
+  ADD D, 2      ; next VRAM address
+  JMP star_loopc1
+  MOV A, 1      ; Set A to 1 to indicate that the unicorn has caught the star
+
+check_star2:
+    MOV A, [unicorn_position] ; Load the unicorn position from memory into register A
+    SHRB AL, 4
+    CMPB AL, 0x0A
+    JNE check_star3
+    MOV A, [unicorn_position]
+    SHRB AH, 3
+    CMPB AH, 0x0E
+    JNE check_star3            ; Jump if the unicorn position is not equal to the star position
+    MOV A, [score] 
+    INC A
+    CMP A, 3
+    JE win
+    MOV [score], A
+    MOV A, 0
+    MOV C, str        ; pointer to string
+    MOV D, 0x0A0E     ; pointer to text cell 
+loopc2:
+  ; iterate through the string
+  MOV A, D
+  OUT 8         ; VIDADDR
+  MOVB AH, [C]  ; first char
+  CMPB AH, 0    ; if end of string break the loop
+  JE breakc2
+  MOVB AL, 0xFB ; color
+  OUT 9         ; VIDDATA
+  INC C         ; next char
+  ADD D, 2      ; next text cell, moving right to write in the even address
+  JMP loopc2
+breakc2:
+  MOV C, star   ; pointer to star
+  MOV D, 0x8800 ; address of ascii @ (64) that we want to change
+  MOV B, 16     ; size of data
+star_loopc2:
+  CMP B, 0      ; is it the end, if so break
+  JE return
+  MOV A, D      ; address
+  OUT 8         ; VIDADDR
+  MOV A, [C]    ; pointer to star
+  OUT 9         ; VIDDATA
+  DEC B         
+  ADD C, 2      ; next word in RAM
+  ADD D, 2      ; next VRAM address
+  JMP star_loopc2
+    MOV A, 1    ; Set A to 1 to indicate that the unicorn has caught the star
+    
+check_star3:
+    MOV A, [unicorn_position] ; Load the unicorn position from memory into register A
+    SHRB AL, 4
+    CMPB AL, 0x00
+    JNE not_caught
+    MOV A, [unicorn_position]
+    SHRB AH, 3
+    CMPB AH, 0x1C
+    JNE not_caught    ; Jump if the unicorn position is not equal to the star position'
+    MOV C, str        ; pointer to string
+    MOV D, 0x001C     ; pointer to text cell 
+loopc3:
+  ; iterate through the string
+  MOV A, D
+  OUT 8         ; VIDADDR
+  MOVB AH, [C]  ; first char
+  CMPB AH, 0    ; if end of string break the loop
+  JE breakc3
+  MOVB AL, 0xFB ; color
+  OUT 9         ; VIDDATA
+  INC C         ; next char
+  ADD D, 2      ; next text cell, moving right to write in the even address
+  MOV A, [score] 
+  INC A
+  CMP A, 3
+  JE win
+  MOV [score], A
+  MOV A, 0
+  JMP loopc3
+breakc3:
+  MOV C, star   ; pointer to star
+  MOV D, 0x8800 ; address of ascii @ (64) that we want to change
+  MOV B, 16     ; size of data
+star_loopc3:
+  MOV A, 0
+  MOV A, [score] 
+  INC A
+  CMP A, 3
+  JE win
+  MOV [score], A
+  CMP B, 0      ; is it the end, if so break
+  JE return
+  MOV A, D      ; address
+  OUT 8         ; VIDADDR
+  MOV A, [C]    ; pointer to star
+  OUT 9         ; VIDDATA
+  DEC B         
+  ADD C, 2      ; next word in RAM
+  ADD D, 2      ; next VRAM address
+  JMP star_loopc3
+  MOV A, 1      ; Set A to 1 to indicate that the unicorn has caught the star
+    
+not_caught:
+    MOV A, 0    ; Set A to 0 to indicate that the unicorn has not caught the star
+
+return:
+    RET
+
+win:
+    CALL text_display2
+    MOV C, won      ; Pointer to string str.
+    MOV D, 0x0720   ; Pointer to the graphics cell at (16 , 7).
+print_loop:
+     MOV A, D       ; Activate the graphics cell
+     OUT 8          ; through the VIDADDR register .
+     MOVB AH , [C]  ; Get the current string character .
+     CMPB AH , 0    ; If zero , we are done printing .
+     JE print_break
+     MOVB AL, 162   ; Set up the purple color.
+     OUT 9          ; Print the character .
+     INC C          ; Next character .
+     ADD D, 2       ; Next screen cell .
+     JMP print_loop ; Repeat for the next character .
+print_break:
+     MOV A, 0xA302  ; The VRAM address of the HScroll information .
+     OUT 8          ; Activate the HScroll VRAM address .
+     MOV A, 0       ; Let the offset be initially 0.
+offset_loop:
+     OUT 9          ; Set the current offset .
+     INC A          ; Prepare the new offset value .
+     CMP A, 512     ; If the offset has reached 512 pixels ,
+     JB offset_continue
+     MOV A, 0       ; reset the offset back to 0.
+offset_continue:
+      CALL wait_next_frame ; Wait for the next frame.
+      JMP offset_loop
+RET
+
+wait_next_frame:
+   PUSH A                   ; The function will use register A.
+wait_next_frame_loop:
+   MOV A, [vsync]           ; Check the current vsync value.
+   CMP A, 0                 ; If still 0,
+   JE wait_next_frame_loop  ; check it again.
+   MOV [vsync], 0           ; The vsync signal received. Reset it.
+   POP A                    ; Restore the original value of register A.
+   RET
+    
+main:
+    ; stack pointer.
+    MOV SP, 0x0FFF
+
+    ; Enable the graphic card in TEXT mode.
+    MOV A, 1
+    OUT 7
+    ; Construct and show the "Loading..." message.
+    CALL draw_loading_screen
+    CALL show_loading_screen
+    CALL text_display1
+
+    ; Initialize the graphic elements.
+    CALL load_vram_tiles
+    ; Prepare the game.
+    CALL draw_map        ; Draw the map.
+
+    ; Show the start of the polygon map.
+    CALL show_map_screen
+
+    ; Enable keypress (1) and VSync (4) interrupts.
+    MOV A, 5
+    OUT 0
+    STI
+
+    ; Enter the game loop.
+game_loop:
+    CALL process_user_input     ; Process the user input.
+    CALL draw_unicorn           ; Draw the bird on its new position.
+    CALL wait_next_frame        ; Wait for the VSync flag.
+    JMP game_loop               ; Do the next frame.
+    
+    
+ORG 0x1000
+text_displayADD:
